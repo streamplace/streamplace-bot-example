@@ -1,4 +1,4 @@
-import { Client, ok } from "@atcute/client";
+import { Client } from "@atcute/client";
 import { PasswordSession } from "@atcute/password-session";
 import { FirehoseSubscription } from "@atcute/firehose";
 import * as ComAtprotoSyncSubscribeRepos from "@atcute/atproto/types/sync/subscribeRepos";
@@ -41,7 +41,9 @@ async function main() {
     validateMessages: false,
   });
 
-  console.log(`Listening for chat messages on ${RELAY_URL} for streamer ${STREAMER_DID}...`);
+  console.log(
+    `Listening for chat messages on ${RELAY_URL} for streamer ${STREAMER_DID}...`,
+  );
 
   for await (const message of subscription) {
     if (message.$type !== "com.atproto.sync.subscribeRepos#commit") {
@@ -81,18 +83,21 @@ async function main() {
 
       // Send a response
       try {
-        const resp = await (client as any).post("com.atproto.repo.createRecord", {
-          input: {
-            repo: session.did,
-            collection: "place.stream.chat.message",
-            record: {
-              $type: "place.stream.chat.message",
-              text: "timer explanation here",
-              createdAt: new Date().toISOString(),
-              streamer: STREAMER_DID,
+        const resp = await (client as any).post(
+          "com.atproto.repo.createRecord",
+          {
+            input: {
+              repo: session.did,
+              collection: "place.stream.chat.message",
+              record: {
+                $type: "place.stream.chat.message",
+                text: "The timer in the corner of Eli's stream is there to measure end-to-end latency of the livestream. The timestamp itself is arbitrary, so it's counting down to Unix time 173173173173.173. Because if you put 173 in an old calculator and turn it upside down, it spells Eli.",
+                createdAt: new Date().toISOString(),
+                streamer: STREAMER_DID,
+              },
             },
           },
-        });
+        );
         if (!resp.ok) {
           console.error("Failed to send response:", resp.data);
         } else {
