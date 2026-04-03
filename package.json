@@ -17,6 +17,7 @@
     "@atcute/cid": "^2.4.1",
     "@atcute/client": "^4.2.1",
     "@atcute/firehose": "^0.1.0",
+    "@atcute/lexicons": "^1.2.9",
     "@atcute/password-session": "^0.1.0"
   },
   "devDependencies": {
