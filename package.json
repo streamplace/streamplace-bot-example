@@ -1,0 +1,28 @@
+{
+  "name": "scp-2721-lord",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "lex": "lex-cli generate"
+  },
+  "dependencies": {
+    "@atcute/atproto": "^3.1.10",
+    "@atcute/bluesky": "^3.3.0",
+    "@atcute/car": "^5.1.1",
+    "@atcute/cbor": "^2.3.2",
+    "@atcute/cid": "^2.4.1",
+    "@atcute/client": "^4.2.1",
+    "@atcute/firehose": "^0.1.0",
+    "@atcute/password-session": "^0.1.0"
+  },
+  "devDependencies": {
+    "@atcute/lex-cli": "^2.5.3",
+    "@types/node": "^25.5.2",
+    "tsx": "^4.0.0",
+    "typescript": "^5.7.0"
+  }
+}
