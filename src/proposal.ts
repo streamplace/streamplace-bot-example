@@ -105,6 +105,12 @@ export interface PlanProposalOptions {
   uri?: string;
   /** Base URL of the review frontend. Defaults to `DEFAULT_PROPOSAL_URL_BASE`. */
   urlBase?: string;
+  /**
+   * The IANA zone the model resolved the request in. The reply renders the
+   * start time in it, so the requester reads the time they asked for; without
+   * one, the record's own `startsAt` string is quoted instead.
+   */
+  timezone?: string;
   now?: Date;
 }
 
@@ -179,20 +185,45 @@ function recordName(record: unknown): string | null {
 }
 
 /**
- * The start time to show in chat, verbatim. Quoting the record's own string is
- * deliberate: rendering it would mean guessing a timezone, and the offset in
- * the string is the one the model resolved.
+ * The start time to show in chat. Rendered in the zone the model assumed, so a
+ * reader sees the time they asked for; the record's own string is kept for when
+ * there is no zone to render it in, which is also the only honest option then.
  */
-function recordStart(record: unknown): string | null {
+function recordStart(record: unknown, timezone: string | undefined): string | null {
   if (typeof record !== "object" || record === null) return null;
   const startsAt = "startsAt" in record ? record.startsAt : undefined;
-  return typeof startsAt === "string" && startsAt !== "" ? startsAt : null;
+  if (typeof startsAt !== "string" || startsAt === "") return null;
+  if (timezone === undefined) return startsAt;
+
+  const at = Date.parse(startsAt);
+  if (Number.isNaN(at)) return startsAt;
+  return new Intl.DateTimeFormat("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+    timeZone: timezone,
+  }).format(at);
+}
+
+/** Zone names are claims about which timezone was assumed, so typos are refused. */
+function checkedTimezone(timezone: string | undefined): string | undefined {
+  if (timezone === undefined) return undefined;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: timezone });
+  } catch {
+    throw new Error(`timezone is not an IANA zone name: ${JSON.stringify(timezone)}`);
+  }
+  return timezone;
 }
 
 /** What the reply says. Kept in one place because its byte offsets matter. */
-function replyText(record: unknown, url: string): string {
+function replyText(record: unknown, url: string, timezone: string | undefined): string {
   const name = recordName(record);
-  const start = name === null ? null : recordStart(record);
+  const start = name === null ? null : recordStart(record, timezone);
   if (name === null) return `Proposed a record for you to review: ${url}`;
   if (start === null) return `Proposed "${name}" for you to review: ${url}`;
   return `Proposed "${name}" starting ${start} for you to review: ${url}`;
@@ -210,7 +241,7 @@ export function planProposal(options: PlanProposalOptions): ProposalPlan {
   const proposalUri: CanonicalResourceUri =
     `at://${options.bot}/${PROPOSAL_COLLECTION}/${rkey}`;
   const url = reviewUrl(options.urlBase ?? DEFAULT_PROPOSAL_URL_BASE, proposalUri);
-  const text = replyText(options.record, url);
+  const text = replyText(options.record, url, checkedTimezone(options.timezone));
 
   // The link is the last thing in the message, so its facet is a byte range
   // ending at the end of the text. Bytes, not characters: the name is arbitrary.

@@ -171,11 +171,14 @@ async function createRecord(
  * repo, and answer in chat with a link to it. The input is a saved envelope
  * with the resolved record added to it:
  *
- *   {"request": {…a [schedule.request] line…}, "record": {…}, "uri": "at://…"}
+ *   {"request": {…a [schedule.request] line…}, "record": {…}, "uri": "at://…",
+ *    "timezone": "America/Los_Angeles"}
  *
  * `uri` is optional: without it the record is proposed at a fresh TID in the
- * requester's own repo. `--dry-run` prints what would be written, and the
- * link, without logging in or writing anything.
+ * requester's own repo. `timezone` is optional too, and is the zone the model
+ * resolved the request in: the reply renders the start time in it, and without
+ * it the record's own `startsAt` string is quoted instead. `--dry-run` prints
+ * what would be written, and the link, without logging in or writing anything.
  *
  * Nothing is created in the requester's repo; approving the proposal is a
  * separate act, by them.
@@ -204,6 +207,11 @@ async function runPropose(path: string, dryRun: boolean): Promise<void> {
     process.exit(1);
   }
   const uri = "uri" in parsed && typeof parsed.uri === "string" ? parsed.uri : undefined;
+  const timezone = "timezone" in parsed ? parsed.timezone : undefined;
+  if (timezone !== undefined && typeof timezone !== "string") {
+    console.error(`${path} has a "timezone" that is not a string`);
+    process.exit(1);
+  }
 
   const password = process.env.BOT_PASSWORD;
   if (!dryRun && !password) {
@@ -230,6 +238,7 @@ async function runPropose(path: string, dryRun: boolean): Promise<void> {
       request,
       record,
       uri,
+      timezone,
       urlBase: process.env.PROPOSAL_URL_BASE,
       now: new Date(),
     });

@@ -47,10 +47,13 @@ const realMessage = {
 const EVENT = {
   $type: "community.lexicon.calendar.event",
   name: "Reading dist.town/release.software docs",
-  startsAt: "2026-10-16T15:00:00.000Z",
-  endsAt: "2026-10-16T16:00:00.000Z",
+  startsAt: "2026-10-16T16:00:00.000Z",
+  endsAt: "2026-10-16T17:00:00.000Z",
   createdAt: "2026-10-16T00:42:07.000Z",
 };
+
+/** The zone the model researched for the requester: their profile says Seattle. */
+const TIMEZONE = "America/Los_Angeles";
 
 function request(): ScheduleRequest {
   const request = buildScheduleRequest({
@@ -69,7 +72,10 @@ function request(): ScheduleRequest {
   return request;
 }
 
-function planFor(record: unknown = EVENT, options: { uri?: string } = {}): ProposalPlan {
+function planFor(
+  record: unknown = EVENT,
+  options: { uri?: string; timezone?: string } = {},
+): ProposalPlan {
   return planProposal({ bot: BOT, request: request(), record, now: FIXTURE_NOW, ...options });
 }
 
@@ -144,11 +150,11 @@ test("orders rkeys the way the writes happened, same microsecond included", () =
   assert.ok(mintTid(new Date(FIXTURE_NOW.getTime() + 1)) > tids[2]);
 });
 
-test("quotes the record's own name and start time in the reply, and links to it", () => {
-  const plan = planFor();
+test("quotes the record's name and start time in the reply, and links to it", () => {
+  const plan = planFor(EVENT, { timezone: TIMEZONE });
   assert.equal(
     plan.reply.text,
-    `Proposed "${EVENT.name}" starting ${EVENT.startsAt} for you to review: ${plan.url}`,
+    `Proposed "${EVENT.name}" starting Fri, Oct 16, 2026, 9:00 AM PDT for you to review: ${plan.url}`,
   );
   assert.equal(plan.reply.streamer, REQUESTER);
   assert.equal(plan.reply.createdAt, FIXTURE_NOW.toISOString());
@@ -196,6 +202,32 @@ test("keeps a long or multi-byte name out of the link's byte range", () => {
 
   const parsed = v.safeParse(PlaceStreamChatMessage.mainSchema, plan.reply);
   assert.ok(parsed.ok, parsed.ok ? "" : parsed.message);
+});
+
+test("renders the start time in whichever zone the model assumed", () => {
+  const denver = planFor(EVENT, { timezone: "America/Denver" });
+  assert.ok(
+    denver.reply.text.includes("starting Fri, Oct 16, 2026, 10:00 AM MDT for you to review:"),
+    denver.reply.text,
+  );
+  assert.ok(planFor(EVENT, { timezone: "UTC" }).reply.text.includes("4:00 PM UTC"));
+});
+
+test("falls back to quoting the record's own start time", () => {
+  // Without a zone, rendering would be a guess, so the record's string — the
+  // fact the reviewer is approving — is quoted instead.
+  assert.ok(planFor().reply.text.includes(`starting ${EVENT.startsAt} for you to review:`));
+
+  // And a start time that isn't a datetime has no rendering in the first place.
+  assert.ok(
+    planFor({ ...EVENT, startsAt: "9am-ish" }, { timezone: TIMEZONE }).reply.text.includes(
+      "starting 9am-ish for you to review:",
+    ),
+  );
+});
+
+test("refuses a zone name that is not one, rather than assuming a default", () => {
+  assert.throws(() => planFor(EVENT, { timezone: "America/Nowhere" }), /IANA zone name/);
 });
 
 test("takes the uri when the model names where the record goes", () => {

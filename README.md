@@ -39,7 +39,7 @@ Field notes:
 - `host` is the machine the bot runs on. Fine as a last resort when that is someone's laptop, wrong when it is a server.
 - `message.uri` is the request as stored, if the model needs to read it back.
 
-Resolving a request means: pick the requester's timezone from their records, turn "9am tomorrow" into an absolute instant in it, and *say which timezone was assumed* so a bad guess is visible immediately. The resolved record goes back in with the envelope, as below.
+Resolving a request means: pick the requester's timezone from their records, turn "9am tomorrow" into an absolute instant in it, and hand the zone back as `timezone` so the reply can say the time in it. The resolved record goes back in with the envelope, as below.
 
 The same envelope can be produced without credentials, which is how the pipeline is tested:
 
@@ -61,10 +61,11 @@ The envelope is the model's *input*. Its answer is the same envelope with the re
   "record": {
     "$type": "community.lexicon.calendar.event",
     "name": "Reading dist.town/release.software docs",
-    "startsAt": "2026-10-16T15:00:00.000Z",
-    "endsAt": "2026-10-16T16:00:00.000Z",
+    "startsAt": "2026-10-16T16:00:00.000Z",
+    "endsAt": "2026-10-16T17:00:00.000Z",
     "createdAt": "2026-10-16T01:43:13.894Z"
-  }
+  },
+  "timezone": "America/Los_Angeles"
 }
 ```
 
@@ -76,12 +77,12 @@ BOT_IDENTIFIER=did:plc:… BOT_PASSWORD=… pnpm dev -- --propose resolved.json
 With credentials it writes `com.iameli.record.proposal` into the bot's own repo and replies in the chat the request came from, with a link as the last thing in the message:
 
 ```json
-{"proposal":"at://did:plc:…/com.iameli.record.proposal/3mxx…","rkey":"3mxx…","target":"at://did:plc:…/community.lexicon.calendar.event/3mxx…","url":"https://pdsls.dev/at://did:plc:…/com.iameli.record.proposal/3mxx…","text":"Proposed \"Reading dist.town/release.software docs\" starting 2026-10-16T15:00:00.000Z for you to review: https://pdsls.dev/at://…","streamer":"did:plc:…","chat":"at://did:plc:…/place.stream.chat.message/3mxx…"}
+{"proposal":"at://did:plc:…/com.iameli.record.proposal/3mxx…","rkey":"3mxx…","target":"at://did:plc:…/community.lexicon.calendar.event/3mxx…","url":"https://pdsls.dev/at://did:plc:…/com.iameli.record.proposal/3mxx…","text":"Proposed \"Reading dist.town/release.software docs\" starting Fri, Oct 16, 2026, 9:00 AM PDT for you to review: https://pdsls.dev/at://…","streamer":"did:plc:…","chat":"at://did:plc:…/place.stream.chat.message/3mxx…"}
 ```
 
 - Nothing is written into the requester's repo. The proposal names where the record *would* go — a fresh TID in the requester's repo, or `"uri"` in the input file when the model knows better — and approving it is a separate act, by them.
 - `record` goes into the proposal byte for byte. The bot only reads `$type` (which collection the URI names), `name` and `startsAt` (for the sentence in chat) out of it; a record that can't say where it goes is refused rather than guessed at.
-- The reply quotes the record's own `startsAt` string instead of rendering it, because rendering is where a timezone assumption would silently hide.
+- `timezone` is the zone the model resolved the request in, so the reply can say *"starting Fri, Oct 16, 2026, 9:00 AM PDT"* — the time the requester asked for, in the zone the model assumed for them. A name that isn't an IANA zone is refused, and without one at all the record's own `startsAt` string is quoted instead: rendering it would mean guessing, and the string is the fact being approved.
 - Writing the proposal is `at://` all the way down, but the link has to be openable, hence `PROPOSAL_URL_BASE`. Until there is a frontend that reads proposals and offers to approve them, a plain at-uri viewer is the whole review experience.
 
 ## Developing
