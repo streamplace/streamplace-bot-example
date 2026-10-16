@@ -1,0 +1,32 @@
+{
+	"$type": "com.atproto.lexicon.schema",
+	"id": "com.iameli.record.proposal",
+	"lexicon": 1,
+	"defs": {
+		"main": {
+			"type": "record",
+			"description": "A record proposed for someone else to create. The target record is kept inline, so a reviewer can see exactly what would be written before approving it.",
+			"key": "tid",
+			"record": {
+				"type": "object",
+				"required": ["uri", "record", "createdAt"],
+				"properties": {
+					"uri": {
+						"type": "string",
+						"format": "at-uri",
+						"description": "The URI the proposed record would be written to, if approved: at://<repo>/<collection>/<rkey>."
+					},
+					"record": {
+						"type": "unknown",
+						"description": "The proposed record, exactly as it would be written."
+					},
+					"createdAt": {
+						"type": "string",
+						"format": "datetime",
+						"description": "Client-declared timestamp when this proposal was created."
+					}
+				}
+			}
+		}
+	}
+}

@@ -13,6 +13,7 @@ It watches the chat firehose for one streamer, answers `!timer`, and turns messa
 | `STREAMER_DID` | No | | DID of the streamer whose chat to watch. Unset watches every chat on the relay, which is what a bot that can be asked for a stream by anyone wants |
 | `RELAY_URL` | No | `wss://bsky.network` | Firehose relay WebSocket URL |
 | `BOT_SERVICE` | No | `https://stream.place` | PDS (station) URL for the bot account |
+| `PROPOSAL_URL_BASE` | No | `https://pdsls.dev` | Where proposal links point. Anything that resolves an at-uri works |
 
 ## Asking for a stream to be scheduled
 
@@ -38,7 +39,7 @@ Field notes:
 - `host` is the machine the bot runs on. Fine as a last resort when that is someone's laptop, wrong when it is a server.
 - `message.uri` is the request as stored, if the model needs to read it back.
 
-Resolving a request means: pick the requester's timezone from their records, turn "9am tomorrow" into an absolute instant in it, and *say which timezone was assumed* so a bad guess is visible immediately.
+Resolving a request means: pick the requester's timezone from their records, turn "9am tomorrow" into an absolute instant in it, and *say which timezone was assumed* so a bad guess is visible immediately. The resolved record goes back in with the envelope, as below.
 
 The same envelope can be produced without credentials, which is how the pipeline is tested:
 
@@ -49,6 +50,39 @@ BOT_IDENTIFIER=did:plc:… pnpm dev -- \
 ```
 
 `--requester` is the DID whose timezone the model should research, so a CLI run without it can only fall back on `host`. `--streamer` stands in for `STREAMER_DID` when the bot is watching every chat and the run is pretending to be one of them.
+
+## Proposing the resolved record
+
+The envelope is the model's *input*. Its answer is the same envelope with the record and where it goes attached, which is what `--propose` reads:
+
+```json
+{
+  "request": { "kind": "schedule.request", "…": "…the envelope above, verbatim…" },
+  "record": {
+    "$type": "community.lexicon.calendar.event",
+    "name": "Reading dist.town/release.software docs",
+    "startsAt": "2026-10-16T15:00:00.000Z",
+    "endsAt": "2026-10-16T16:00:00.000Z",
+    "createdAt": "2026-10-16T01:43:13.894Z"
+  }
+}
+```
+
+```sh
+BOT_IDENTIFIER=did:plc:… pnpm dev -- --propose resolved.json --dry-run   # print the plan, write nothing
+BOT_IDENTIFIER=did:plc:… BOT_PASSWORD=… pnpm dev -- --propose resolved.json
+```
+
+With credentials it writes `com.iameli.record.proposal` into the bot's own repo and replies in the chat the request came from, with a link as the last thing in the message:
+
+```json
+{"proposal":"at://did:plc:…/com.iameli.record.proposal/3mxx…","rkey":"3mxx…","target":"at://did:plc:…/community.lexicon.calendar.event/3mxx…","url":"https://pdsls.dev/at://did:plc:…/com.iameli.record.proposal/3mxx…","text":"Proposed \"Reading dist.town/release.software docs\" starting 2026-10-16T15:00:00.000Z for you to review: https://pdsls.dev/at://…","streamer":"did:plc:…","chat":"at://did:plc:…/place.stream.chat.message/3mxx…"}
+```
+
+- Nothing is written into the requester's repo. The proposal names where the record *would* go — a fresh TID in the requester's repo, or `"uri"` in the input file when the model knows better — and approving it is a separate act, by them.
+- `record` goes into the proposal byte for byte. The bot only reads `$type` (which collection the URI names), `name` and `startsAt` (for the sentence in chat) out of it; a record that can't say where it goes is refused rather than guessed at.
+- The reply quotes the record's own `startsAt` string instead of rendering it, because rendering is where a timezone assumption would silently hide.
+- Writing the proposal is `at://` all the way down, but the link has to be openable, hence `PROPOSAL_URL_BASE`. Until there is a frontend that reads proposals and offers to approve them, a plain at-uri viewer is the whole review experience.
 
 ## Developing
 

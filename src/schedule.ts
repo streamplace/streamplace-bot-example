@@ -6,7 +6,7 @@
 // (who asked, what they said, exactly when they said it) is in the envelope.
 
 import * as v from "@atcute/lexicons/validations";
-import type { Did } from "@atcute/lexicons/syntax";
+import { isDid, type Did } from "@atcute/lexicons/syntax";
 import * as PlaceStreamChatMessage from "./lexicons/types/place/stream/chat/message.js";
 
 /** Prefix for the machine-readable line, so consumers can grep stdout. */
@@ -332,6 +332,62 @@ export function buildScheduleRequest(
 /** One line, greppable, JSON — the whole machine-facing contract. */
 export function formatScheduleRequest(request: ScheduleRequest): string {
   return `${SCHEDULE_REQUEST_MARKER} ${JSON.stringify(request)}`;
+}
+
+/**
+ * The parts of an envelope that say where a record goes and what to reply to.
+ * `ScheduleRequest` satisfies this as it stands, so a request the bot just
+ * built and one read back from stdout are equally usable.
+ */
+export interface RequestRef {
+  /** The chat the request arrived in. */
+  channel: { streamer: Did };
+  /** Who asked; null for a CLI request that named nobody. */
+  requester: { did: Did | null };
+  /** The message being answered: what the reply points at. */
+  message: { uri: string; cid: string | null };
+}
+
+/**
+ * Reads an envelope back in, which is how `--propose` picks up a request a
+ * model has since resolved. Only the fields above are checked: this is the bot
+ * reading its own output, and the envelope's job is to survive that round trip
+ * through a language model unchanged.
+ */
+export function readRequest(value: unknown): RequestRef | null {
+  if (typeof value !== "object" || value === null) return null;
+
+  const channel = "channel" in value ? value.channel : undefined;
+  const streamer =
+    typeof channel === "object" && channel !== null && "streamer" in channel
+      ? channel.streamer
+      : undefined;
+  if (!isDid(streamer)) return null;
+
+  const requester = "requester" in value ? value.requester : undefined;
+  const did =
+    typeof requester === "object" && requester !== null && "did" in requester
+      ? requester.did
+      : undefined;
+  if (did !== undefined && did !== null && !isDid(did)) return null;
+
+  const message = "message" in value ? value.message : undefined;
+  const uri =
+    typeof message === "object" && message !== null && "uri" in message
+      ? message.uri
+      : undefined;
+  const cid =
+    typeof message === "object" && message !== null && "cid" in message
+      ? message.cid
+      : undefined;
+  if (typeof uri !== "string") return null;
+  if (cid !== undefined && cid !== null && typeof cid !== "string") return null;
+
+  return {
+    channel: { streamer },
+    requester: { did: isDid(did) ? did : null },
+    message: { uri, cid: typeof cid === "string" ? cid : null },
+  };
 }
 
 /** Stands in for a real chat message when the bot is driven from the CLI. */
