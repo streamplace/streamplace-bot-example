@@ -35,11 +35,8 @@ export const PROPOSAL_COLLECTION = "com.iameli.record.proposal";
 /** Prefix for the machine-readable line describing a proposal. */
 export const PROPOSAL_MARKER = "[record.proposal]";
 
-/**
- * Where review links point until there is a frontend built for them. Any
- * ordinary at-uri viewer will do: the link carries the whole proposal.
- */
-export const DEFAULT_PROPOSAL_URL_BASE = "https://pdsls.dev";
+/** Attie frontend where requesters review and approve proposed records. */
+export const DEFAULT_PROPOSAL_URL_BASE = "https://buzzing-ivory-wagon.attie.site";
 
 /** Kept well inside the chat message limits, so a long name can't break them. */
 export const MAX_NAME_CHARACTERS = 80;
@@ -129,7 +126,7 @@ export interface ProposalPlan {
   reply: ChatReply;
 }
 
-/** `{base}/at://{did}/{collection}/{rkey}` — resolvable by ordinary viewers. */
+/** `{base}/at://{did}/{collection}/{rkey}` — links to the proposal for review. */
 export function reviewUrl(urlBase: string, proposalUri: CanonicalResourceUri): string {
   return `${urlBase.replace(/\/+$/, "")}/at://${proposalUri.slice("at://".length)}`;
 }

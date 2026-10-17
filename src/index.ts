@@ -3,6 +3,7 @@ import { PasswordSession } from "@atcute/password-session";
 import { FirehoseSubscription } from "@atcute/firehose";
 import * as ComAtprotoSyncSubscribeRepos from "@atcute/atproto/types/sync/subscribeRepos";
 import type {} from "@atcute/atproto/types/repo/createRecord";
+import type {} from "@atcute/atproto/types/repo/applyWrites";
 import { fromUint8Array } from "@atcute/car";
 import { decode as decodeCbor, fromBytes } from "@atcute/cbor";
 import { fromCidLink, toString as cidToString } from "@atcute/cid";
@@ -17,13 +18,26 @@ import {
   formatScheduleRequest,
   readRequest,
   type BotIdentity,
+  type ScheduleRequest,
 } from "./schedule.js";
 import {
   formatProposal,
   planProposal,
+  mintTid,
   PROPOSAL_COLLECTION,
   type ProposalPlan,
 } from "./proposal.js";
+import { resolveSchedule, DEFAULT_OPENROUTER_MODEL, type SchedulerOptions } from "./scheduler.js";
+
+async function secret(name: string): Promise<string | undefined> {
+  const value = process.env[name]?.trim();
+  if (value) return value;
+  const path = process.env[`${name}_FILE`];
+  if (!path) return undefined;
+  const contents = (await readFile(path, "utf8")).trim();
+  if (!contents) throw new Error(`${name}_FILE is empty`);
+  return contents;
+}
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -58,13 +72,16 @@ interface CliArgs {
   streamer?: Did;
   /** Path to the proposal input: a saved request plus the resolved record. */
   propose?: string;
-  /** Print what `--propose` would write, without writing it. */
+  /** Resolve a saved schedule.request envelope through the configured model. */
+  resolve?: string;
+  /** Resolve without publishing, or preview a manually supplied proposal. */
   dryRun?: boolean;
 }
 
 /**
  * `--request "schedule a stream ..." [--requester did:plc:...] [--streamer did:plc:...]`
  * `--propose request.json [--dry-run]`
+ * `--resolve envelope.json [--dry-run]`
  */
 function parseCliArgs(argv: string[]): CliArgs {
   const args: CliArgs = {};
@@ -80,6 +97,7 @@ function parseCliArgs(argv: string[]): CliArgs {
       flag !== "--request" &&
       flag !== "--requester" &&
       flag !== "--streamer" &&
+      flag !== "--resolve" &&
       flag !== "--propose"
     ) {
       continue;
@@ -93,6 +111,8 @@ function parseCliArgs(argv: string[]): CliArgs {
       args.request = value;
     } else if (flag === "--propose") {
       args.propose = value;
+    } else if (flag === "--resolve") {
+      args.resolve = value;
     } else if (isDid(value)) {
       if (flag === "--requester") {
         args.requester = value;
@@ -137,7 +157,7 @@ async function resolveBotIdentity(): Promise<BotIdentity> {
 
 /**
  * Writes one record into the bot's own repo and returns its URI, or null after
- * logging why. Every caller here is a CLI command, so exiting is on them.
+ * logging why. The caller decides how to handle a failed write.
  */
 async function createRecord(
   client: Client,
@@ -164,6 +184,94 @@ async function createRecord(
     console.error(`Failed to write ${collection}:`, err);
     return null;
   }
+}
+
+/** Commit proposals and their replies together, so a reply cannot point at a missing proposal. */
+async function writePlans(client: Client, bot: Did, plans: ProposalPlan[]): Promise<void> {
+  const chatKeys = plans.map(() => mintTid(new Date()));
+  const writes = plans.flatMap((plan, index) => [
+    {
+      $type: "com.atproto.repo.applyWrites#create" as const,
+      collection: PROPOSAL_COLLECTION as Nsid,
+      rkey: plan.rkey,
+      value: plan.proposal,
+    },
+    {
+      $type: "com.atproto.repo.applyWrites#create" as const,
+      collection: "place.stream.chat.message" as const,
+      rkey: chatKeys[index],
+      value: plan.reply,
+    },
+  ]);
+  const response = await client.post("com.atproto.repo.applyWrites", {
+    input: { repo: bot, writes },
+  });
+  if (!response.ok) throw new Error(`Could not publish proposals: ${JSON.stringify(response.data)}`);
+  for (const [index, plan] of plans.entries()) {
+    console.log(formatProposal(plan, {
+      proposalUri: plan.proposalUri,
+      chatUri: `at://${bot}/place.stream.chat.message/${chatKeys[index]}`,
+    }));
+  }
+}
+
+function threadedReply(request: ScheduleRequest, text: string): Record<string, unknown> {
+  const { uri, cid } = request.message;
+  return {
+    $type: "place.stream.chat.message",
+    text,
+    createdAt: new Date().toISOString(),
+    streamer: request.channel.streamer,
+    ...(cid ? { reply: { root: { uri, cid }, parent: { uri, cid } } } : {}),
+  };
+}
+
+async function handleSchedule(
+  request: ScheduleRequest,
+  bot: BotIdentity,
+  client: Client | null,
+  options: SchedulerOptions,
+  dryRun: boolean,
+): Promise<void> {
+  const result = await resolveSchedule(request, options);
+  console.log(`[schedule.result] ${JSON.stringify(result)}`);
+  if (result.clarification !== null) {
+    const reply = threadedReply(request, result.clarification);
+    if (dryRun) {
+      console.log(`[schedule.reply] ${JSON.stringify({ dryRun: true, record: reply })}`);
+    } else if (!client || await createRecord(client, bot.did, "place.stream.chat.message", reply) === null) {
+      throw new Error("Could not send scheduling clarification");
+    }
+    return;
+  }
+  const plans = result.records.map((record) => planProposal({
+    bot: bot.did,
+    request,
+    record,
+    timezone: record.timezone as string,
+    urlBase: process.env.PROPOSAL_URL_BASE,
+  }));
+  if (dryRun) {
+    for (const plan of plans) console.log(formatProposal(plan, { dryRun: true }));
+    console.log("Dry run: nothing was written.");
+  } else {
+    if (!client) throw new Error("BOT_PASSWORD or BOT_PASSWORD_FILE is required to publish");
+    await writePlans(client, bot.did, plans);
+  }
+}
+
+async function readEnvelope(path: string): Promise<ScheduleRequest> {
+  const value = JSON.parse(await readFile(path, "utf8"));
+  if (
+    !readRequest(value) || value.kind !== "schedule.request" ||
+    !isDid(value.bot?.did) || typeof value.bot?.identifier !== "string" ||
+    typeof value.message?.prompt !== "string" ||
+    typeof value.message?.createdAt !== "string" ||
+    !Number.isFinite(Date.parse(value.message.createdAt))
+  ) {
+    throw new Error(`${path} must contain a complete schedule.request envelope`);
+  }
+  return value as ScheduleRequest;
 }
 
 /**
@@ -213,9 +321,9 @@ async function runPropose(path: string, dryRun: boolean): Promise<void> {
     process.exit(1);
   }
 
-  const password = process.env.BOT_PASSWORD;
+  const password = await secret("BOT_PASSWORD");
   if (!dryRun && !password) {
-    console.error("--propose writes records: set BOT_PASSWORD, or pass --dry-run to see the plan");
+    console.error("--propose writes records: set BOT_PASSWORD or BOT_PASSWORD_FILE, or pass --dry-run");
     process.exit(1);
   }
 
@@ -255,28 +363,39 @@ async function runPropose(path: string, dryRun: boolean): Promise<void> {
 
   console.log(`Logged in as ${session.did}`);
   const client = new Client({ handler: session });
-  // The proposal's rkey is minted in the plan, so the link in the reply is
-  // already correct when the record lands.
-  const proposalUri = await createRecord(client, botDid, PROPOSAL_COLLECTION, plan.proposal, plan.rkey);
-  if (proposalUri === null) {
-    process.exit(1);
-  }
-  const chatUri = await createRecord(client, botDid, "place.stream.chat.message", plan.reply);
-  if (chatUri === null) {
-    console.error(
-      `Wrote ${proposalUri}, but the reply failed: nothing points at the proposal yet.`,
-    );
-    process.exit(1);
-  }
-  console.log(formatProposal(plan, { proposalUri, chatUri }));
+  await writePlans(client, botDid, [plan]);
 }
 
 async function main() {
   const args = parseCliArgs(process.argv.slice(2));
   const hostTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (args.propose !== undefined) {
+    await runPropose(args.propose, args.dryRun === true);
+    return;
+  }
+  const apiKey = await secret("OPENROUTER_API_KEY");
+  const scheduler: SchedulerOptions | null = apiKey
+    ? { apiKey, model: process.env.OPENROUTER_MODEL ?? DEFAULT_OPENROUTER_MODEL }
+    : null;
+  const password = await secret("BOT_PASSWORD");
+  if (scheduler && !password && !args.dryRun) {
+    throw new Error("Autonomous scheduling requires BOT_PASSWORD or BOT_PASSWORD_FILE; use --dry-run to write nothing");
+  }
+  if (args.resolve && !scheduler) {
+    throw new Error("--resolve requires OPENROUTER_API_KEY or OPENROUTER_API_KEY_FILE");
+  }
 
-  // --request: pretend a chat message mentioned us, and emit the envelope.
-  // Same code path as the firehose, minus the login and the CAR decoding.
+  if (args.resolve) {
+    const request = await readEnvelope(args.resolve);
+    const session = password && !args.dryRun
+      ? await PasswordSession.login({ service: BOT_SERVICE, identifier: BOT_IDENTIFIER, password })
+      : null;
+    const bot = session ? { did: session.did, identifier: BOT_IDENTIFIER } : await resolveBotIdentity();
+    await handleSchedule(request, bot, session ? new Client({ handler: session }) : null, scheduler!, args.dryRun === true);
+    return;
+  }
+
+  // --request: exercise the same scheduling path without needing a chat write.
   if (args.request !== undefined) {
     const streamer = args.streamer ?? STREAMER_DID;
     if (!streamer) {
@@ -305,19 +424,16 @@ async function main() {
       throw new Error("could not build a schedule request from --request");
     }
     console.log(formatScheduleRequest(request));
+    if (scheduler) {
+      const session = password && !args.dryRun
+        ? await PasswordSession.login({ service: BOT_SERVICE, identifier: BOT_IDENTIFIER, password })
+        : null;
+      await handleSchedule(request, bot, session ? new Client({ handler: session }) : null, scheduler, args.dryRun === true);
+    }
     return;
   }
 
-  // --propose: the request has been resolved, so write the proposal into the
-  // bot's repo and answer in chat with a link to it.
-  if (args.propose !== undefined) {
-    await runPropose(args.propose, args.dryRun === true);
-    return;
-  }
-
-  // Authenticate the bot. Schedule requests don't send anything, so a missing
-  // password only costs us the ability to reply in chat.
-  const password = process.env.BOT_PASSWORD;
+  // Authenticate once for the live listener and autonomous writes.
   let session: PasswordSession | null = null;
   let bot: BotIdentity;
   if (password) {
@@ -334,13 +450,20 @@ async function main() {
       `No BOT_PASSWORD set: read-only, replies disabled. Watching for mentions of ${bot.did}.`,
     );
   }
-  const client = session ? new Client({ handler: session }) : null;
+  const client = session && !args.dryRun ? new Client({ handler: session }) : null;
+  console.log(scheduler
+    ? `Autonomous scheduling enabled: ${scheduler.model}${args.dryRun ? " (dry run)" : ""}`
+    : "No OpenRouter key: schedule requests are emitted to stdout only.");
+  const active = new Set<string>();
+  const seen = new Set<string>();
 
   // Subscribe to the relay firehose
   const subscription = new FirehoseSubscription({
     service: RELAY_URL,
     nsid: ComAtprotoSyncSubscribeRepos.mainSchema,
     validateMessages: false,
+    onConnectionOpen: () => console.log("Relay connected"),
+    onConnectionError: () => console.error("Relay connection error"),
   });
 
   console.log(
@@ -354,6 +477,7 @@ async function main() {
     }
 
     const commit = message as ComAtprotoSyncSubscribeRepos.Commit;
+    if (commit.repo === bot.did) continue;
 
     for (const op of commit.ops) {
       if (op.action !== "create") continue;
@@ -382,7 +506,7 @@ async function main() {
       const streamer = STREAMER_DID ?? (isDid(record.streamer) ? record.streamer : null);
       if (!streamer) continue;
 
-      // Someone mentioned the bot: hand the request to the LLM on stdout.
+      // Preserve the diagnostic envelope; resolve automatically when a model is configured.
       const request = buildScheduleRequest({
         record,
         bot,
@@ -397,6 +521,26 @@ async function main() {
       if (request) {
         console.log(`Got schedule request from ${commit.repo} in ${streamer}'s chat`);
         console.log(formatScheduleRequest(request));
+        if (scheduler && !seen.has(request.message.uri)) {
+          seen.add(request.message.uri);
+          if (seen.size > 2048) seen.delete(seen.values().next().value!);
+          if (active.size >= 3) {
+            if (client) await createRecord(client, bot.did, "place.stream.chat.message", threadedReply(
+              request, "I'm handling a few scheduling requests already. Please try again shortly.",
+            ));
+          } else {
+            active.add(request.message.uri);
+            // Do not block the high-volume firehose while the model researches this request.
+            void handleSchedule(request, bot, client, scheduler, args.dryRun === true)
+              .catch(async (error) => {
+                console.error(`Scheduling failed for ${request.message.uri}:`, error);
+                if (client) await createRecord(client, bot.did, "place.stream.chat.message", threadedReply(
+                  request, "I couldn't finish scheduling. Please check recent proposals before trying again.",
+                ));
+              })
+              .finally(() => active.delete(request.message.uri));
+          }
+        }
         continue;
       }
 

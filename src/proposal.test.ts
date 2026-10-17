@@ -11,7 +11,6 @@ import type { Did } from "@atcute/lexicons/syntax";
 import * as PlaceStreamChatMessage from "./lexicons/types/place/stream/chat/message.js";
 import * as ComIameliRecordProposal from "./lexicons/types/com/iameli/record/proposal.js";
 import {
-  DEFAULT_PROPOSAL_URL_BASE,
   MAX_NAME_CHARACTERS,
   PROPOSAL_COLLECTION,
   formatProposal,
@@ -114,11 +113,12 @@ test("proposes a calendar event at a fresh rkey in the requester's repo", () => 
   assert.equal(decodeTid(plan.rkey).micros >= BigInt(FIXTURE_NOW.getTime()) * 1000n, true);
 });
 
-test("writes the proposal into the bot's repo, and links where a viewer reads it", () => {
+test("writes the proposal into the bot's repo, and links to review it", () => {
   const plan = planFor();
-  assert.equal(plan.url, `${DEFAULT_PROPOSAL_URL_BASE}/at://${plan.proposalUri.slice("at://".length)}`);
-  assert.equal(plan.url, `https://pdsls.dev/at://${BOT}/${PROPOSAL_COLLECTION}/${plan.rkey}`);
-  assert.equal(reviewUrl("https://sidechannel.cheeky.town/", plan.proposalUri), plan.url.replace("pdsls.dev", "sidechannel.cheeky.town"));
+  assert.equal(
+    reviewUrl("https://sidechannel.cheeky.town/", plan.proposalUri),
+    `https://sidechannel.cheeky.town/${plan.proposalUri}`,
+  );
 
   // The one thing the reviewer needs: the proposed record's own words.
   const parsed = v.safeParse(ComIameliRecordProposal.mainSchema, plan.proposal);

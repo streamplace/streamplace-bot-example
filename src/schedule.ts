@@ -1,9 +1,6 @@
-// Schedule requests: something in chat mentions the bot, and we hand the
-// request off to an LLM by printing one JSON envelope per line on stdout.
-//
-// The bot deliberately does not reason about times, timezones, or titles
-// itself — that is the LLM's job. Everything it needs to do that research
-// (who asked, what they said, exactly when they said it) is in the envelope.
+// Schedule requests: normalize a chat mention into a JSON envelope for the
+// autonomous scheduler or a manual --propose workflow. The model reasons about
+// dates and content; this module preserves who asked, what they said, and when.
 
 import * as v from "@atcute/lexicons/validations";
 import { isDid, type Did } from "@atcute/lexicons/syntax";
