@@ -2,7 +2,10 @@ name: Build and push Docker image
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - gpt61/autonomous-scheduling
+  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
@@ -29,8 +32,9 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
+            type=ref,event=branch
             type=sha
-            type=raw,value=latest
+            type=raw,value=latest,enable={{is_default_branch}}
 
       - uses: docker/build-push-action@v6
         with:

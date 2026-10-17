@@ -76,6 +76,23 @@ An OpenRouter HTTP 402 requires account credits. A key's unused spending
 allowance is not an account balance; increasing that allowance does not fund
 inference. The bot does not switch models or fabricate events to hide this error.
 
+## Container images
+
+The image workflow runs on pushes to `main` and `gpt61/autonomous-scheduling`,
+and supports manual `workflow_dispatch` runs. It publishes branch tags and
+`sha-<short-commit>` tags to `ghcr.io/streamplace/streamplace-bot-example`.
+Only the default branch publishes `latest`.
+
+For the unmerged autonomous-scheduling branch:
+
+```sh
+docker pull ghcr.io/streamplace/streamplace-bot-example:gpt61-autonomous-scheduling
+```
+
+Use the environment variables above and mount secret files read-only at their
+configured container paths. Pin a SHA tag or image digest for a reproducible
+deployment; the branch tag moves on each successful branch build.
+
 ## Asking for a stream to be scheduled
 
 Mention the bot in chat and ask:
