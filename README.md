@@ -22,6 +22,7 @@ thumbnail/blob constraints, and proposal verification workflow.
 | `RELAY_URL` | No | `wss://bsky.network` | Firehose relay WebSocket URL |
 | `BOT_SERVICE` | No | `https://stream.place` | PDS (station) URL for the bot account |
 | `PROPOSAL_URL_BASE` | No | `https://buzzing-ivory-wagon.attie.site` | Attie frontend for reviewing and approving proposals; override to use another compatible frontend |
+| `SHUTDOWN_TIMEOUT_MS` | No | `25000` | Maximum live-listener drain time after SIGTERM/SIGINT; positive integer milliseconds |
 
 ## Run autonomously
 
@@ -92,6 +93,21 @@ docker pull ghcr.io/streamplace/streamplace-bot-example:gpt61-autonomous-schedul
 Use the environment variables above and mount secret files read-only at their
 configured container paths. Pin a SHA tag or image digest for a reproducible
 deployment; the branch tag moves on each successful branch build.
+
+## Kubernetes shutdown
+
+On SIGTERM or SIGINT, the live listener stops accepting relay messages, closes
+the relay/reconnect loop, and drains in-flight scheduling and chat writes.
+It exits with code 0 after draining; repeated signals do not interrupt that drain.
+If `SHUTDOWN_TIMEOUT_MS` expires, it reports unfinished work and exits with code 1.
+A forced exit can leave a network write's commit status unknown; inspect recent
+proposal/chat records before replaying requests.
+
+The default 25-second drain fits Kubernetes' default 30-second termination grace
+period when there is no `preStop` hook. If you raise `SHUTDOWN_TIMEOUT_MS`, also
+raise `terminationGracePeriodSeconds`, allowing extra time for any `preStop` hook
+and shutdown overhead. Keep the image's default exec-form Node command; if you
+wrap it in a shell, use `exec node dist/index.js` so signals reach Node.
 
 ## Asking for a stream to be scheduled
 

@@ -433,6 +433,43 @@ async function main() {
     return;
   }
 
+  const shutdownTimeoutMs = Number(process.env.SHUTDOWN_TIMEOUT_MS ?? 25_000);
+  if (!Number.isSafeInteger(shutdownTimeoutMs) || shutdownTimeoutMs < 1 || shutdownTimeoutMs > 2_147_483_647) {
+    throw new Error("SHUTDOWN_TIMEOUT_MS must be a positive integer within the Node timer range");
+  }
+  let stopping = false;
+  let closeRelay: (() => Promise<unknown>) | undefined;
+  const pending = new Set<Promise<unknown>>();
+  function track<T>(operation: Promise<T>): Promise<T> {
+    const task = operation.finally(() => pending.delete(task));
+    pending.add(task);
+    return task;
+  }
+  function shutdown(signal: NodeJS.Signals): void {
+    if (stopping) return;
+    stopping = true;
+    console.log(`${signal} received: stopping relay intake and draining ${pending.size} in-flight operation(s)`);
+    const deadline = setTimeout(() => {
+      console.error(`Shutdown timed out after ${shutdownTimeoutMs}ms with ${pending.size} unfinished operation(s); check proposal/chat records before replaying requests.`);
+      process.exit(1);
+    }, shutdownTimeoutMs);
+    void (async () => {
+      await closeRelay?.();
+      await Promise.allSettled(pending);
+      // The relay iterator's return() closes its socket but does not wake a
+      // pending next(). Exit explicitly after draining work and flushing stdout.
+      process.stdout.write("Shutdown complete\n", () => {
+        clearTimeout(deadline);
+        process.exit(0);
+      });
+    })().catch((error) => {
+      console.error("Shutdown failed:", error);
+      process.exit(1);
+    });
+  }
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
+
   // Authenticate once for the live listener and autonomous writes.
   let session: PasswordSession | null = null;
   let bot: BotIdentity;
@@ -450,6 +487,7 @@ async function main() {
       `No BOT_PASSWORD set: read-only, replies disabled. Watching for mentions of ${bot.did}.`,
     );
   }
+  if (stopping) return;
   const client = session && !args.dryRun ? new Client({ handler: session }) : null;
   console.log(scheduler
     ? `Autonomous scheduling enabled: ${scheduler.model}${args.dryRun ? " (dry run)" : ""}`
@@ -465,13 +503,16 @@ async function main() {
     onConnectionOpen: () => console.log("Relay connected"),
     onConnectionError: () => console.error("Relay connection error"),
   });
+  const messages = subscription[Symbol.asyncIterator]();
+  closeRelay = () => messages.return();
 
   console.log(
     `Listening for chat messages on ${RELAY_URL}` +
       (STREAMER_DID ? ` for streamer ${STREAMER_DID}...` : ", in every chat it carries..."),
   );
 
-  for await (const message of subscription) {
+  for await (const message of messages) {
+    if (stopping) break;
     if (message.$type !== "com.atproto.sync.subscribeRepos#commit") {
       continue;
     }
@@ -480,6 +521,7 @@ async function main() {
     if (commit.repo === bot.did) continue;
 
     for (const op of commit.ops) {
+      if (stopping) break;
       if (op.action !== "create") continue;
       if (!op.path.startsWith("place.stream.chat.message/")) continue;
       if (!op.cid) continue;
@@ -525,20 +567,20 @@ async function main() {
           seen.add(request.message.uri);
           if (seen.size > 2048) seen.delete(seen.values().next().value!);
           if (active.size >= 3) {
-            if (client) await createRecord(client, bot.did, "place.stream.chat.message", threadedReply(
+            if (client) await track(createRecord(client, bot.did, "place.stream.chat.message", threadedReply(
               request, "I'm handling a few scheduling requests already. Please try again shortly.",
-            ));
+            )));
           } else {
             active.add(request.message.uri);
             // Do not block the high-volume firehose while the model researches this request.
-            void handleSchedule(request, bot, client, scheduler, args.dryRun === true)
+            void track(handleSchedule(request, bot, client, scheduler, args.dryRun === true)
               .catch(async (error) => {
                 console.error(`Scheduling failed for ${request.message.uri}:`, error);
                 if (client) await createRecord(client, bot.did, "place.stream.chat.message", threadedReply(
                   request, "I couldn't finish scheduling. Please check recent proposals before trying again.",
                 ));
               })
-              .finally(() => active.delete(request.message.uri));
+              .finally(() => active.delete(request.message.uri)));
           }
         }
         continue;
@@ -554,12 +596,12 @@ async function main() {
       }
 
       // Send a response
-      const sent = await createRecord(client, bot.did, "place.stream.chat.message", {
+      const sent = await track(createRecord(client, bot.did, "place.stream.chat.message", {
         $type: "place.stream.chat.message",
         text: TIMER_REPLY,
         createdAt: new Date().toISOString(),
         streamer,
-      });
+      }));
       if (sent !== null) {
         console.log("Sent response");
       }

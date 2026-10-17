@@ -61,6 +61,12 @@ the last 2,048 handled message URIs in memory (not durable across restart).
 Without an OpenRouter key it reverts to envelope-only operation; do not mistake
 that for an autonomous deployment.
 
+The listener handles SIGTERM/SIGINT by closing relay intake and draining active
+model/chat writes, with a default 25-second deadline (`SHUTDOWN_TIMEOUT_MS`).
+Set Kubernetes' termination grace longer than that deadline plus any `preStop`
+hook. Clean shutdown exits 0; a drain timeout exits 1 and can leave commit status
+unknown, so inspect proposal/chat records before replaying interrupted requests.
+
 ## Resolve each request
 
 The software performs these steps automatically. Use them when debugging the
