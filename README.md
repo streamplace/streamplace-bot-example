@@ -53,7 +53,7 @@ empty `records` array and one specific clarification question instead.
 `finish_schedule` returns data only; it is not a write tool.
 
 The model supplies local civil `startsAt`/`endsAt` values in
-`YYYY-MM-DDTHH:mm:ss` form plus an IANA `timezone`. Code converts both endpoints
+`YYYY-MM-DDTHH:mm:ss` form plus an IANA zone or fixed device offset in `timezone`. Code converts both endpoints
 to canonical UTC, rejecting invalid dates and DST gaps/overlaps, rather than
 depending on model arithmetic or a tool-call transcript. `[schedule.result]`
 and the actual proposals contain those normalized UTC event timestamps.
@@ -94,16 +94,18 @@ The bot logs one diagnostic JSON envelope per request, prefixed with `[schedule.
 Field notes:
 
 - `message.prompt` is the text with the bot's own mention cut out — that is the request.
-- `requester.did` is who to research. In practice their profile description is the signal that pins a timezone ("Seattle via Minnesota" → `America/Los_Angeles`).
-- `message.createdAt` is client-declared and Streamplace clients write UTC, so `createdAtUtcOffsetMinutes` is normally `null`. It is only set when a client bothered to declare an offset, which makes it a strong hint when present.
+- `requester.did` identifies whose profile/calendar context to prefetch. Use that context for event details, but research timezone from it only when `createdAt` ends in `Z`/`z` and the request specifies no event timezone.
+- `message.createdAt` is the device's source of truth for local time when it carries a numeric suffix, such as `-07:00` or `+05:45`. `createdAtUtcOffsetMinutes` exposes that offset (including explicit `+00:00`); it is `null` for Zulu timestamps. Do not override an offset using profile location or past events.
 - `message.mentionSource` is `facet` when the client resolved the handle into a mention facet and `text` when the handle was only typed as words. Both count as a mention; `text` just means the client didn't resolve it.
 - `host` describes the bot's machine, not the requester's location. The autonomous model does not use it as timezone evidence.
 - `message.uri` is the request as stored, if the model needs to read it back.
 
-Resolving a request means choosing an evidenced IANA timezone and interpreting
-relative dates from `message.createdAt` in that zone. DST gaps/overlaps require
-clarification. The event stores `timezone` so both Attie and the chat reply can
-show the intended local time. An unspecified duration is not guessed.
+Use an explicitly requested event timezone first; otherwise preserve the device
+offset in `message.createdAt`. Research a timezone only for Zulu (`Z`/`z`)
+timestamps without an explicit event zone. Numeric offsets are fixed: they do
+not identify an IANA location or its future DST rules, so do not guess either.
+Relative dates are anchored to the message's local calendar date. The event
+stores the chosen zone/offset in `timezone`; an unspecified duration is not guessed.
 
 Exercise the real model without publishing (configure an OpenRouter key first):
 
@@ -149,7 +151,7 @@ With credentials it atomically writes `com.iameli.record.proposal` and its chat 
 
 - Nothing is written into the requester's repo. The proposal names where the record *would* go — a fresh TID in their repo, or the explicit `"uri"` in a manual input file. Approval is a separate act by them.
 - Manual `--propose` preserves `record` byte for byte and checks enough to construct the target and reply, not the event's full schema. Autonomous model records additionally pass the scheduler's calendar/time checks before any write.
-- `timezone` is the zone the model resolved the request in, so the reply can say *"starting Fri, Oct 16, 2026, 9:00 AM PDT"* — the time the requester asked for, in the zone the model assumed for them. A name that isn't an IANA zone is refused, and without one at all the record's own `startsAt` string is quoted instead: rendering it would mean guessing, and the string is the fact being approved.
+- `timezone` controls local rendering in the reply: an IANA name can show `9:00 AM PDT`, while a device offset can show `9:00 AM GMT+5:45`. Invalid names/offsets are refused. Without a timezone, the record's own `startsAt` string is quoted instead of guessing.
 - Review links open the [Attie proposal frontend](https://buzzing-ivory-wagon.attie.site), where the requester can review and approve the record. The bot itself still only writes the proposal and chat reply; it does not approve on the user's behalf. `PROPOSAL_URL_BASE` overrides the frontend without changing the proposal's at-uri.
 
 ## Developing

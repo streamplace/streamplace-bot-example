@@ -201,6 +201,17 @@ test("a delayed request cannot publish an event whose start has already passed",
   await assert.rejects(run(h), refused(/already passed at processing time/));
 });
 
+test("device offsets survive normalization without guessing a regional timezone", async () => {
+  const h = harness([answerTurn(answer([event({ timezone: "+05:45" })]))]);
+  const source = request();
+  source.message.createdAt = "2026-10-16T00:42:06+05:45";
+  source.message.createdAtUtcOffsetMinutes = 345;
+  const record = (await resolveSchedule(source, h.options)).records[0]!;
+  assert.equal(record.timezone, "+05:45");
+  assert.equal(record.startsAt, "2026-10-16T03:15:00.000Z");
+  assert.equal(record.endsAt, "2026-10-16T04:15:00.000Z");
+});
+
 
 test("normalizes both local endpoints to UTC without relying on model conversion", async () => {
   const h = harness([answerTurn(answer([event({ endsAt: "2026-10-16T09:30:00" })]))]);
@@ -472,7 +483,6 @@ test("media is kept only when it is a blob the requester's own events already ca
 
 test("records the lexicon or the approval flow couldn't honour are refused", async () => {
   const cases: [string, Json, RegExp][] = [
-    ["offset instead of a zone", event({ timezone: "-07:00" }), /timezone is not an IANA zone/],
     ["abbreviation instead of a zone", event({ timezone: "PST" }), /timezone is not an IANA zone/],
     ["sloppy zone casing", event({ timezone: "america/los_angeles" }), /timezone is not an IANA zone/],
     ["an unknown status", event({ status: "confirmed" }), /status is not a known/],

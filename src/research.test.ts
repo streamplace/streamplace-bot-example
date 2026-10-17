@@ -66,6 +66,13 @@ test("a plain local time maps to exactly one instant, with the zone's own DST of
   assert.equal(resolveLocalTime("Asia/Kolkata", "2026-10-17T09:00:00").instant, "2026-10-17T03:30:00.000Z");
 });
 
+test("device offsets stay fixed across DST and preserve fractional-hour offsets", () => {
+  assert.equal(resolveLocalTime("-07:00", "2026-12-25T09:00:00").instant, "2026-12-25T16:00:00.000Z");
+  assert.equal(resolveLocalTime("-07:00", "2026-11-01T01:30:00").instant, "2026-11-01T08:30:00.000Z");
+  assert.equal(resolveLocalTime("+05:45", "2026-10-17T09:00:00").instant, "2026-10-17T03:15:00.000Z");
+  assert.equal(resolveLocalTime("+00:00", "2026-10-17T09:00:00").instant, "2026-10-17T09:00:00.000Z");
+});
+
 test("a time the clocks skip is rejected, and the minutes around it are not", () => {
   assert.throws(() => resolveLocalTime("America/Los_Angeles", "2026-03-08T02:30:00"), /does not exist/);
   assert.equal(resolveLocalTime("America/Los_Angeles", "2026-03-08T01:59:59").instant, "2026-03-08T09:59:59.000Z");
@@ -116,8 +123,8 @@ test("only real calendar dates and clock times in the exact format are accepted"
   assert.equal(resolveLocalTime("UTC", "2028-02-29T10:00:00").instant, "2028-02-29T10:00:00.000Z");
 });
 
-test("timezones must be IANA zone names, not offsets or typos", () => {
-  for (const bad of ["Mars/Olympus", "PST", "EST", "+05:00", "-0700", "", " America/Los_Angeles", 5, null, undefined]) {
+test("timezones reject invalid offsets, abbreviations and typos", () => {
+  for (const bad of ["Mars/Olympus", "PST", "EST", "+24:00", "-07:60", "-0700", "", " America/Los_Angeles", 5, null, undefined]) {
     assert.throws(() => resolveLocalTime(bad, "2026-10-17T09:00:00"), Error, String(bad));
   }
   assert.equal(resolveLocalTime("america/los_angeles", "2026-10-17T09:00:00").timezone, "America/Los_Angeles");
@@ -497,6 +504,22 @@ test("prefetch offers time anchors in zones seen in the requester's events, neve
   assert.equal(context.time.inZones[1].messageCreatedAt.weekday, "Thursday");
   assert.equal(context.time.current.instant, NOW.toISOString());
   assert.ok(!zones.includes(REQUEST.host.timezone));
+});
+
+test("the timestamp device offset outranks profile zones and stale envelope metadata", async () => {
+  for (const [createdAt, timezone, minutes, localDate] of [
+    ["2026-10-15T23:30:00-07:00", "-07:00", -420, "2026-10-15"],
+    ["2026-10-16T00:30:00+05:45", "+05:45", 345, "2026-10-16"],
+    ["2026-10-16T00:30:00+00:00", "+00:00", 0, "2026-10-16"],
+  ] as const) {
+    const request = { ...REQUEST, message: { ...REQUEST.message, createdAt, createdAtUtcOffsetMinutes: null } };
+    const net = fakeNetwork(atprotoHandler());
+    const context = await prefetchContext(request, { fetch: net.fetch, now: () => NOW }) as any;
+    assert.equal(context.time.deviceTimezone, timezone);
+    assert.equal(context.time.messageDeclaredUtcOffsetMinutes, minutes);
+    assert.equal(context.time.messageCreatedAt.date, localDate);
+    assert.deepEqual(context.time.inZones.map((zone: any) => zone.timezone), [timezone]);
+  }
 });
 
 test("prefetch with no requester makes no requests and does not invent an identity", async () => {

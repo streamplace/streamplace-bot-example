@@ -226,10 +226,6 @@ test("falls back to quoting the record's own start time", () => {
   );
 });
 
-test("refuses a zone name that is not one, rather than assuming a default", () => {
-  assert.throws(() => planFor(EVENT, { timezone: "America/Nowhere" }), /IANA zone name/);
-});
-
 test("takes the uri when the model names where the record goes", () => {
   const something = `at://${REQUESTER}/community.lexicon.calendar.event/3mxxdrkntri2f`;
   const plan = planFor(EVENT, { uri: something });

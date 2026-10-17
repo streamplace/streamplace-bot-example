@@ -12,7 +12,7 @@
 import { isDid, isHandle } from "@atcute/lexicons/syntax";
 
 import { safeFetch, type SafeFetcher, type SafeResponse } from "./safe-http.js";
-import type { ScheduleRequest } from "./schedule.js";
+import { utcOffsetMinutes, type ScheduleRequest } from "./schedule.js";
 
 export interface ModelTool {
   type: "function";
@@ -92,14 +92,14 @@ export const researchTools: ModelTool[] = [
     function: {
       name: "resolve_time",
       description:
-        "The only way to turn civil time into instants. With localTime (YYYY-MM-DDTHH:mm:ss, wall-clock in the zone) it returns the exact UTC instant, " +
+        "Checks a civil time in an IANA timezone or fixed device UTC offset. With localTime (YYYY-MM-DDTHH:mm:ss) it returns the exact UTC instant, " +
         "or fails when that wall time does not exist or happens twice (DST) or is not a real date — then ask for clarification. " +
-        "Without localTime it returns the request message's time and the current time rendered in the zone, for resolving relative dates. " +
-        "Call it for every startsAt and endsAt.",
+        "Without localTime it returns the message and current times rendered in that zone, for resolving relative dates. " +
+        "The bot also converts final event timestamps in code.",
       parameters: {
         type: "object",
         properties: {
-          timezone: { type: "string", description: "An IANA zone name such as America/Los_Angeles." },
+          timezone: { type: "string", description: "An IANA zone such as America/Los_Angeles or the device's fixed offset such as -07:00 or +05:30." },
           localTime: { type: "string", description: "Optional civil time, exactly YYYY-MM-DDTHH:mm:ss, no offset." },
         },
         required: ["timezone"],
@@ -137,15 +137,13 @@ function formatterFor(timezone: string): Intl.DateTimeFormat {
   return formatter;
 }
 
-/**
- * A zone name Intl accepts, as an IANA name. Offsets such as `+05:00` are
- * accepted by Intl but are not zones: they carry no DST rules and are refused.
- * The returned name fixes case only (`america/los_angeles`), never aliases.
- */
+const FIXED_OFFSET = /^[+-](?:[01]\d|2[0-3]):[0-5]\d$/;
+
+/** An IANA zone or explicit device offset. Numeric offsets carry no DST rules. */
 export function checkedTimezone(timezone: unknown): string {
-  if (typeof timezone !== "string" || timezone === "") throw new Error("timezone must be a non-empty IANA zone name");
-  if (!/^(?:UTC|[a-z][a-z_]*(?:\/[a-z0-9_+-]+)+)$/i.test(timezone)) {
-    throw new Error(`timezone ${JSON.stringify(timezone)} is not an IANA zone name (use UTC or an area/location, not an offset or abbreviation)`);
+  if (typeof timezone !== "string" || timezone === "") throw new Error("timezone must be an IANA zone or UTC offset");
+  if (!FIXED_OFFSET.test(timezone) && !/^(?:UTC|[a-z][a-z_]*(?:\/[a-z0-9_+-]+)+)$/i.test(timezone)) {
+    throw new Error(`timezone ${JSON.stringify(timezone)} is not an IANA zone or signed HH:MM offset`);
   }
   let resolved: string;
   try {
@@ -244,6 +242,10 @@ export function resolveLocalTime(timezone: unknown, localTime: unknown) {
   const zone = checkedTimezone(timezone);
   const civil = parseCivil(localTime);
   const naive = Date.UTC(civil.year, civil.month - 1, civil.day, civil.hour, civil.minute, civil.second);
+  if (FIXED_OFFSET.test(zone)) {
+    const minutes = (Number(zone.slice(1, 3)) * 60 + Number(zone.slice(4, 6))) * (zone[0] === "-" ? -1 : 1);
+    return describeInstant(new Date(naive - minutes * 60_000), zone);
+  }
 
   // An instant maps to this wall time iff offset(instant) = wall - instant.
   // Offsets near the wall time bound the candidates; each is verified.
@@ -788,14 +790,19 @@ function timeContext(
   } catch (error) {
     missing.push(describeError(error));
   }
-  const zones = [{ timezone: "UTC", source: "reference" }, ...observedZones.filter((zone) => zone.timezone !== "UTC")];
+  const declaredMinutes = utcOffsetMinutes(request.message.createdAt);
+  const deviceTimezone = declaredMinutes === null ? null : formatOffset(declaredMinutes);
+  const zones = deviceTimezone
+    ? [{ timezone: deviceTimezone, source: "message.createdAt device offset (source of truth)" }]
+    : [{ timezone: "UTC", source: "reference" }, ...observedZones.filter((zone) => zone.timezone !== "UTC")];
   return {
-    guidance:
-      "Anchor relative dates to messageCreatedAt in the zone you choose, then call resolve_time. " +
-      "Do not use the host's timezone as evidence of the requester's zone.",
+    deviceTimezone,
+    guidance: deviceTimezone
+      ? "The createdAt device offset is the source of truth for local scheduling. Use it unless the requester explicitly chose a different event timezone. Do not research or infer another timezone from profiles/events. Preserve this fixed offset; do not invent IANA or DST rules."
+      : "createdAt ends in Zulu and supplies no local zone. Research timezone evidence if the request does not specify one. Anchor relative dates to the message instant in the selected zone; never infer from the host.",
     current: describeInstant(now, "UTC"),
-    messageCreatedAt: created === null ? null : describeInstant(created, "UTC"),
-    messageDeclaredUtcOffsetMinutes: request.message.createdAtUtcOffsetMinutes,
+    messageCreatedAt: created === null ? null : describeInstant(created, deviceTimezone ?? "UTC"),
+    messageDeclaredUtcOffsetMinutes: declaredMinutes,
     inZones: zones.map(({ timezone, source }) => ({
       timezone,
       source,

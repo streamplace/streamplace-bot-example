@@ -35,12 +35,12 @@ export interface ScheduleRequest {
   message: {
     uri: string;
     cid: string | null;
-    /** Client-declared. Streamplace clients write UTC, with no offset. */
+    /** Client-declared; newer Streamplace clients include their device's UTC offset. */
     createdAt: string;
     /**
-     * Offset declared in `createdAt` itself, in minutes east of UTC, or null
-     * when the timestamp is UTC — which is the common case. Non-null is a
-     * strong hint at the author's timezone; null is not.
+     * Device-declared offset in minutes east of UTC, or null for Zulu (Z/z).
+     * An explicit numeric offset, including +00:00, is authoritative for local
+     * scheduling; research a timezone only for Zulu timestamps.
      */
     createdAtUtcOffsetMinutes: number | null;
     /** The message as typed, mentions included. */
@@ -55,7 +55,7 @@ export interface ScheduleRequest {
     facets: FacetLike[];
   };
   relay: string | null;
-  /** Where the bot ran, as a last-resort timezone signal. */
+  /** Where the bot ran; never evidence of a remote requester's timezone. */
   host: { timezone: string; utcOffsetMinutes: number };
 }
 
@@ -223,7 +223,7 @@ export function findMention(message: ChatMessage, bot: BotIdentity): Mention | n
     : null;
 }
 
-/** Minutes east of UTC declared in a datetime string, or null for UTC. */
+/** Device offset in minutes east of UTC, or null for Zulu (Z/z). */
 export function utcOffsetMinutes(iso: string): number | null {
   const match = /([+-])(\d{2}):?(\d{2})$/.exec(iso.trim());
   if (!match) return null;

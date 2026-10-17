@@ -103,7 +103,7 @@ export interface PlanProposalOptions {
   /** Base URL of the review frontend. Defaults to `DEFAULT_PROPOSAL_URL_BASE`. */
   urlBase?: string;
   /**
-   * The IANA zone the model resolved the request in. The reply renders the
+   * The IANA zone or fixed device offset the model resolved the request in. The reply renders the
    * start time in it, so the requester reads the time they asked for; without
    * one, the record's own `startsAt` string is quoted instead.
    */
@@ -212,7 +212,7 @@ function checkedTimezone(timezone: string | undefined): string | undefined {
   try {
     new Intl.DateTimeFormat("en-US", { timeZone: timezone });
   } catch {
-    throw new Error(`timezone is not an IANA zone name: ${JSON.stringify(timezone)}`);
+    throw new Error(`timezone is not a supported IANA zone or UTC offset: ${JSON.stringify(timezone)}`);
   }
   return timezone;
 }
